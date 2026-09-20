@@ -1,0 +1,153 @@
+// KnowledgeHub AI — PostgreSQL + pgvector schema
+// Production multi-tenant knowledge platform
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum DocumentStatus {
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+model Organization {
+  id          String       @id @default(cuid())
+  name        String
+  slug        String       @unique
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  memberships Membership[]
+  collections Collection[]
+  documents   Document[]
+  conversations Conversation[]
+}
+
+model User {
+  id          String       @id @default(cuid())
+  email       String       @unique
+  name        String
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  memberships Membership[]
+  documents   Document[]   @relation("UploadedBy")
+  conversations Conversation[]
+}
+
+model Membership {
+  id             String       @id @default(cuid())
+  organizationId String
+  userId         String
+  role           Role         @default(MEMBER)
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@index([organizationId])
+}
+
+model Collection {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  documents      Document[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model Document {
+  id             String         @id @default(cuid())
+  organizationId String
+  collectionId   String
+  uploadedById   String
+  name           String
+  mimeType       String
+  fileSize       Int
+  status         DocumentStatus @default(PROCESSING)
+  errorMessage   String?
+  chunkCount     Int            @default(0)
+  contentHash    String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  collection     Collection     @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  uploadedBy     User           @relation("UploadedBy", fields: [uploadedById], references: [id])
+  chunks         DocumentChunk[]
+
+  @@index([organizationId, status])
+  @@index([collectionId])
+}
+
+/// DocumentChunk stores text segments and their embeddings.
+/// In production SQL migrations, add: embedding vector(1536)
+/// and an IVFFlat / HNSW index for cosine similarity.
+model DocumentChunk {
+  id         String                       @id @default(cuid())
+  documentId String
+  chunkIndex Int
+  content    String
+  tokenCount Int
+  charCount  Int
+  metadata   Json                         @default("{}")
+  /// Stored as Unsupported until Prisma natively maps pgvector;
+  /// raw SQL: embedding vector(1536)
+  embedding  Unsupported("vector")?
+  createdAt  DateTime                     @default(now())
+  document   Document                     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, chunkIndex])
+  @@index([documentId])
+}
+
+model Conversation {
+  id             String       @id @default(cuid())
+  organizationId String
+  userId         String
+  title          String       @default("New conversation")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages       Message[]
+
+  @@index([organizationId, userId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  role           MessageRole
+  content        String
+  sources        Json?
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+}
